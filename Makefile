@@ -1,52 +1,82 @@
-# Names of the code directory and the Docker image, change them to match your project
-DOCKER_IMAGE_NAME := livi
-DOCKER_CONTAINER_NAME := livi
+.PHONY: usage build run run-bash stop logs uv check clean
+
+# ----------------
+# Variables
+# ----------------
+
+DOCKER_IMAGE_NAME := project-template
+DOCKER_CONTAINER_NAME := project-template
 CODE_DIRECTORY := src
+GPU_DEVICE := 2
+DATA_DIRECTORY := /data/nfs/analysis/interns/jaffolter
 
-DOCKER_PARAMS=  -dit --name=$(DOCKER_CONTAINER_NAME) -v /data/nfs/analysis:/nfs 
+# GPU (comment if gpu not needed)
+DOCKER_GPU_PARAMS := --gpus '"device=$(GPU_DEVICE)"' --shm-size=8g
 
-# Specify GPU device(s) to use. Comment out this line if you don't have GPUs available
-DOCKER_PARAMS+= --gpus '"device=2"' --shm-size=8g
-DOCKER_RUN_MOUNT= docker run $(DOCKER_PARAMS) -v $(PWD):/workspace $(DOCKER_IMAGE_NAME)
+# Mounts
+DOCKER_MOUNTS := -v $(DATA_DIRECTORY):/workspace/data -v $(PWD):/workspace
+
+# Base docker run
+DOCKER_RUN := docker run $(DOCKER_GPU_PARAMS) $(DOCKER_MOUNTS)
+
+# ----------------
+# Usage
+# ----------------
 
 usage:
-	@echo "Available commands:\n-----------"
-	@echo "	build		Build the Docker image"
-	@echo "	run 		Run the Docker image in a container, after building it"
-	@echo "	run-bash	Same as 'run', and launches an interactive bash session in the container while mounting the current directory"
-	@echo "	stop		Stop the container if it is running"
-	@echo "	logs		Stop the container if it is running"
-	@echo "	poetry		Use poetry to modify 'pyproject.toml' and 'poetry.lock' files (e.g. 'make poetry add requests' to add the 'requests' package)"
-	@echo "	check		Check coding conventions using multiple tools"
-	@echo "	clean		Format your code using black and isort to fit coding conventions"
+	@echo "Available commands:"
+	@echo "  build       Build the Docker image"
+	@echo "  run         Run the Docker image in a named background container"
+	@echo "  run-bash    Start an interactive bash session in a fresh container"
+	@echo "  stop        Stop and remove the named container"
+	@echo "  logs        Follow logs of the named container"
+	@echo "  uv          Run 'uv' inside Docker (e.g. 'make uv add requests')"
+	@echo "  check       Run type-checking and linting with uv"
+	@echo "  clean       Auto-fix linting/formatting issues with uv + ruff"
 
+# ----------------
+# Docker commands
+# ----------------
 
 build:
 	docker build --no-cache --progress=plain -t $(DOCKER_IMAGE_NAME) .
 
+# Launch the container in detached mode with the specified name
 run: 
-	docker run $(DOCKER_PARAMS) -v $(PWD):/workspace --env-file .env $(DOCKER_IMAGE_NAME)
+	$(DOCKER_RUN) --name $(DOCKER_CONTAINER_NAME) -dit --env-file .env $(DOCKER_IMAGE_NAME)
 
-run-bash:
-	$(DOCKER_RUN_MOUNT) /bin/bash || true
-
+# Launch the container in detached mode with the specified name and start a bash session
+run-bash: 
+	$(DOCKER_RUN) --rm -it --env-file .env $(DOCKER_IMAGE_NAME) /bin/bash
 stop:
-	docker stop $(DOCKER_IMAGE_NAME) || true && docker rm $(DOCKER_IMAGE_NAME) || true
+	docker stop $(DOCKER_CONTAINER_NAME) || true
+	docker rm $(DOCKER_CONTAINER_NAME) || true
 
 logs:
 	docker logs -f $(DOCKER_CONTAINER_NAME)
 
-poetry:
-	$(DOCKER_RUN_MOUNT) poetry $(filter-out $@,$(MAKECMDGOALS))
-%:	# Avoid printing anything after executing the 'poetry' target
+# ----------------
+# uv passthrough
+# ----------------
+
+# Example : `make uv add requests`
+uv:
+	$(DOCKER_RUN_UV) uv $(filter-out $@,$(MAKECMDGOALS))
+%:
 	@:
 
+# ----------------
+# Code quality checks
+# ----------------
+
 check:
-	$(DOCKER_RUN_MOUNT) poetry run mypy --show-error-codes $(CODE_DIRECTORY)
-	$(DOCKER_RUN_MOUNT) poetry run ruff check --no-fix $(CODE_DIRECTORY)
-	$(DOCKER_RUN_MOUNT) poetry run ruff format --check $(CODE_DIRECTORY)
-	@echo "\nAll is good !\n"
+	$(DOCKER_RUN_UV) uv run mypy --show-error-codes $(CODE_DIRECTORY)
+	$(DOCKER_RUN_UV) uv run ruff check --no-fix $(CODE_DIRECTORY)
+	$(DOCKER_RUN_UV) uv run ruff format --check $(CODE_DIRECTORY)
+	@echo
+	@echo "All is good!"
+	@echo
 
 clean:
-	$(DOCKER_RUN_MOUNT) poetry run ruff check --fix $(CODE_DIRECTORY)
-	$(DOCKER_RUN_MOUNT) poetry run ruff format $(CODE_DIRECTORY)
+	$(DOCKER_RUN_UV) uv run ruff check --fix $(CODE_DIRECTORY)
+	$(DOCKER_RUN_UV) uv run ruff format $(CODE_DIRECTORY)
